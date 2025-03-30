@@ -1,4 +1,4 @@
-
+# School Assignment 
 Getting Started:
 
 1. Run the `docker-compose up` command.
