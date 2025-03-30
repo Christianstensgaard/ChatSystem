@@ -11,12 +11,12 @@
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 #include <openssl/rand.h>
-#include <openssl/ec.h>       //  for elliptic curve operations
-#include <openssl/pem.h>      //  for PEM encoding/decoding
-#include <openssl/ecdh.h>     //  for ECDH operations
-#include <openssl/bn.h>       //  for BIGNUM operations
-#include <openssl/bio.h>      //  for Base64 encoding/decoding
-#include <openssl/buffer.h>   //  for Base64 buffer management
+#include <openssl/ec.h>
+#include <openssl/pem.h>
+#include <openssl/ecdh.h>
+#include <openssl/bn.h>
+#include <openssl/bio.h>
+#include <openssl/buffer.h>
 
 namespace beast = boost::beast;
 namespace http = beast::http;
@@ -24,66 +24,9 @@ namespace net = boost::asio;
 using tcp = net::ip::tcp;
 
 std::unordered_map<std::string, std::shared_ptr<boost::beast::websocket::stream<tcp::socket>>> user_map;
-std::unordered_map<std::string, std::string> user_keys; // Store shared keys for each user
-std::unordered_map<std::string, std::string> user_public_keys; // Store public keys for each user
+std::unordered_map<std::string, std::string> user_keys;
+std::unordered_map<std::string, std::string> user_public_keys;
 std::mutex user_map_mutex;
-
-std::string encrypt_message(const std::string& plaintext, const std::string& key) {
-    unsigned char iv[16];
-    RAND_bytes(iv, sizeof(iv));
-
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, (unsigned char*)key.data(), iv);
-
-    std::string ciphertext;
-    ciphertext.resize(plaintext.size() + EVP_CIPHER_block_size(EVP_aes_256_cbc()));
-
-    int len;
-    EVP_EncryptUpdate(ctx, (unsigned char*)ciphertext.data(), &len, (unsigned char*)plaintext.data(), plaintext.size());
-    int ciphertext_len = len;
-
-    EVP_EncryptFinal_ex(ctx, (unsigned char*)ciphertext.data() + len, &len);
-    ciphertext_len += len;
-
-    EVP_CIPHER_CTX_free(ctx);
-
-    return std::string((char*)iv, sizeof(iv)) + ciphertext.substr(0, ciphertext_len); // Prepend IV to ciphertext
-}
-
-std::string decrypt_message(const std::string& ciphertext, const std::string& key) {
-    unsigned char iv[16];
-    std::memcpy(iv, ciphertext.data(), sizeof(iv)); // Extract IV from the beginning of the ciphertext
-
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, (unsigned char*)key.data(), iv);
-
-    std::string plaintext;
-    plaintext.resize(ciphertext.size());
-
-    int len;
-    EVP_DecryptUpdate(ctx, (unsigned char*)plaintext.data(), &len, (unsigned char*)ciphertext.data() + sizeof(iv), ciphertext.size() - sizeof(iv));
-    int plaintext_len = len;
-
-    EVP_DecryptFinal_ex(ctx, (unsigned char*)plaintext.data() + len, &len);
-    plaintext_len += len;
-
-    EVP_CIPHER_CTX_free(ctx);
-
-    return plaintext.substr(0, plaintext_len);
-}
-
-std::string generate_hmac(const std::string& message, const std::string& key) {
-    unsigned char hmac[EVP_MAX_MD_SIZE];
-    unsigned int hmac_len;
-
-    HMAC(EVP_sha256(), key.data(), key.size(), (unsigned char*)message.data(), message.size(), hmac, &hmac_len);
-
-    return std::string((char*)hmac, hmac_len);
-}
-
-bool verify_hmac(const std::string& message, const std::string& hmac, const std::string& key) {
-    return generate_hmac(message, key) == hmac;
-}
 
 std::string base64_encode(const std::string& data) {
     BIO* bio = BIO_new(BIO_s_mem());
@@ -107,13 +50,102 @@ std::string base64_decode(const std::string& encoded_data) {
     BIO* b64 = BIO_new(BIO_f_base64());
     bio = BIO_push(b64, bio);
 
-    BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL); // Do not expect newlines
+    BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL);
     std::string decoded_data(encoded_data.size(), '\0');
     int decoded_length = BIO_read(bio, &decoded_data[0], encoded_data.size());
     decoded_data.resize(decoded_length);
 
     BIO_free_all(bio);
     return decoded_data;
+}
+
+std::string encrypt_message(const std::string& plaintext, const std::string& key) {
+    unsigned char iv[16];
+    RAND_bytes(iv, sizeof(iv));
+
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, (unsigned char*)key.data(), iv);
+
+    std::string ciphertext;
+    ciphertext.resize(plaintext.size() + EVP_CIPHER_block_size(EVP_aes_256_cbc()));
+
+    int len;
+    EVP_EncryptUpdate(ctx, (unsigned char*)ciphertext.data(), &len, (unsigned char*)plaintext.data(), plaintext.size());
+    int ciphertext_len = len;
+
+    EVP_EncryptFinal_ex(ctx, (unsigned char*)ciphertext.data() + len, &len);
+    ciphertext_len += len;
+
+    EVP_CIPHER_CTX_free(ctx);
+
+    std::string combined_message((char*)iv, sizeof(iv));
+    combined_message += ciphertext.substr(0, ciphertext_len);
+
+    std::string encoded_message = base64_encode(combined_message);
+
+    std::cout << "Encrypting message: " << plaintext << std::endl;
+    std::cout << "Generated IV (hex): ";
+    for (unsigned char c : iv) std::cout << std::hex << (int)c;
+    std::cout << std::endl;
+    std::cout << "Ciphertext (hex): ";
+    for (unsigned char c : ciphertext.substr(0, ciphertext_len)) std::cout << std::hex << (int)c;
+    std::cout << std::endl;
+    std::cout << "Encoded message (Base64): " << encoded_message << std::endl;
+
+    return encoded_message;
+}
+
+void log_shared_key(const std::string& shared_key) {
+    std::cout << "Shared key (hex): ";
+    for (unsigned char c : shared_key) std::cout << std::hex << (int)c;
+    std::cout << std::endl;
+}
+
+std::string decrypt_message(const std::string& encoded_ciphertext, const std::string& key) {
+    std::string ciphertext = base64_decode(encoded_ciphertext);
+
+    if (ciphertext.size() < 16) {
+        throw std::runtime_error("Ciphertext too short to contain IV.");
+    }
+
+    unsigned char iv[16];
+    std::memcpy(iv, ciphertext.data(), sizeof(iv));
+
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, (unsigned char*)key.data(), iv);
+
+    std::string plaintext;
+    plaintext.resize(ciphertext.size() - sizeof(iv));
+
+    int len;
+    EVP_DecryptUpdate(ctx, (unsigned char*)plaintext.data(), &len, (unsigned char*)ciphertext.data() + sizeof(iv), ciphertext.size() - sizeof(iv));
+    int plaintext_len = len;
+
+    EVP_DecryptFinal_ex(ctx, (unsigned char*)plaintext.data() + len, &len);
+    plaintext_len += len;
+
+    EVP_CIPHER_CTX_free(ctx);
+
+    std::cout << "Decrypting message..." << std::endl;
+    std::cout << "Extracted IV (hex): ";
+    for (unsigned char c : iv) std::cout << std::hex << (int)c;
+    std::cout << std::endl;
+    std::cout << "Decrypted plaintext: " << plaintext.substr(0, plaintext_len) << std::endl;
+
+    return plaintext.substr(0, plaintext_len);
+}
+
+std::string generate_hmac(const std::string& message, const std::string& key) {
+    unsigned char hmac[EVP_MAX_MD_SIZE];
+    unsigned int hmac_len;
+
+    HMAC(EVP_sha256(), key.data(), key.size(), (unsigned char*)message.data(), message.size(), hmac, &hmac_len);
+
+    return std::string((char*)hmac, hmac_len);
+}
+
+bool verify_hmac(const std::string& message, const std::string& hmac, const std::string& key) {
+    return generate_hmac(message, key) == hmac;
 }
 
 void handle_request(tcp::socket& socket) {
@@ -161,9 +193,8 @@ void handle_websocket(tcp::socket socket) {
                 size_t first_colon = message.find(':', 9);
                 if (first_colon != std::string::npos) {
                     username = message.substr(9, first_colon - 9);
-                    std::string public_key = base64_decode(message.substr(first_colon + 1)); // Decode Base64 public key
+                    std::string public_key = base64_decode(message.substr(first_colon + 1));
 
-                    // Validate public key length
                     if (public_key.size() < 65 || public_key.size() > 91) {
                         ws->write(net::buffer("ERROR: Invalid public key length"));
                         continue;
@@ -172,7 +203,7 @@ void handle_websocket(tcp::socket socket) {
                     {
                         std::lock_guard<std::mutex> lock(user_map_mutex);
                         user_map[username] = ws;
-                        user_public_keys[username] = public_key; // Store the raw public key
+                        user_public_keys[username] = public_key;
                     }
 
                     std::cout << "User registered: " << username << std::endl;

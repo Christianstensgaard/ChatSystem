@@ -1,5 +1,6 @@
-CMakeFiles/http_server.dir/src/main.cpp.o: /mnt/c/git/apiCpp/src/main.cpp \
- /usr/include/stdc-predef.h /usr/include/boost/beast/core.hpp \
+CMakeFiles/http_server.dir/src/main.cpp.o: \
+ /mnt/c/git/ChatSystem/src/main.cpp /usr/include/stdc-predef.h \
+ /usr/include/boost/beast/core.hpp \
  /usr/include/boost/beast/core/detail/config.hpp \
  /usr/include/boost/config.hpp /usr/include/boost/config/user.hpp \
  /usr/include/boost/config/detail/select_compiler_config.hpp \

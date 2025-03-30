@@ -121,85 +121,77 @@
         };
 
         socket.onmessage = async (event) => {
+            console.log("WebSocket message received.");
+
             const data = event.data;
 
             if (data.startsWith("PUBLIC_KEY:")) {
                 try {
                     const recipientKeyBytes = base64Decode(data.replace("PUBLIC_KEY:", ""));
-                    console.log("Received recipient's public key (raw bytes):", recipientKeyBytes);
+                    console.log("Processing recipient's public key.");
 
-                    const recipientKeyBase64 = btoa(String.fromCharCode(...recipientKeyBytes));
-                    console.log("Recipient's public key (Base64):", recipientKeyBase64);
+                    recipientPublicKey = await window.crypto.subtle.importKey(
+                        "spki",
+                        recipientKeyBytes,
+                        { name: "ECDH", namedCurve: "P-256" },
+                        true,
+                        []
+                    );
 
-                    if (recipientKeyBytes.length < 65 || recipientKeyBytes.length > 91) {
-                        throw new Error("Invalid recipient public key length.");
-                    }
-
-                    try {
-                        recipientPublicKey = await window.crypto.subtle.importKey(
-                            "spki",
-                            recipientKeyBytes,
-                            { name: "ECDH", namedCurve: "P-256" },
-                            true,
-                            []
-                        );
-                        console.log("Recipient's public key imported successfully.");
-                    } catch (importError) {
-                        console.error("Error importing recipient's public key:", importError);
-                        throw new Error("Failed to import recipient's public key. Ensure it is in the correct SPKI format.");
-                    }
-
-                    try {
-                        sharedKey = await window.crypto.subtle.deriveKey(
-                            {
-                                name: "ECDH",
-                                public: recipientPublicKey,
-                            },
-                            privateKey,
-                            { name: "AES-CBC", length: 256 },
-                            false,
-                            ["encrypt", "decrypt"]
-                        );
-                        console.log("Shared key derived successfully. Connection established with recipient. You can now send encrypted messages.");
-                    } catch (deriveError) {
-                        console.error("Error deriving shared key:", deriveError);
-                        throw new Error("Failed to derive shared key. Ensure the recipient's public key is valid.");
-                    }
+                    sharedKey = await window.crypto.subtle.deriveKey(
+                        {
+                            name: "ECDH",
+                            public: recipientPublicKey,
+                        },
+                        privateKey,
+                        { name: "AES-CBC", length: 256 },
+                        false,
+                        ["encrypt", "decrypt"]
+                    );
+                    console.log("Shared key derived successfully.");
                 } catch (error) {
                     console.error("Error during shared key derivation:", error);
-                    console.log("Failed to establish a secure connection with the recipient. Please try again.");
                 }
-            } else if (data.startsWith("MESSAGE FROM")) {
+            } else if (data.includes(": ")) {
                 try {
                     if (!sharedKey) {
                         console.warn("Shared key is not available. Message decryption skipped.");
-                        console.log("Cannot decrypt the message because the shared key is not available. Please establish a secure connection first.");
                         return;
                     }
 
                     const messageParts = data.split(": ");
-                    const sender = messageParts[0].replace("MESSAGE FROM ", "");
+                    const sender = messageParts[0];
                     const encodedMessage = messageParts[1];
                     const encryptedMessage = base64Decode(encodedMessage);
 
                     const iv = encryptedMessage.slice(0, 16);
-                    if (iv.length !== 16) {
-                        throw new Error("Invalid IV length.");
-                    }
                     const ciphertext = encryptedMessage.slice(16);
-                    const decryptedMessage = await window.crypto.subtle.decrypt(
-                        { name: "AES-CBC", iv },
-                        sharedKey,
-                        ciphertext
-                    );
 
-                    const messageElement = document.createElement('div');
-                    messageElement.className = 'message bot-message';
-                    messageElement.textContent = `${sender}: ${new TextDecoder().decode(decryptedMessage)}`;
-                    chatContainer.appendChild(messageElement);
-                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                    try {
+                        const decryptedMessage = await window.crypto.subtle.decrypt(
+                            { name: "AES-CBC", iv },
+                            sharedKey,
+                            ciphertext
+                        );
+
+                        const plaintext = new TextDecoder().decode(decryptedMessage);
+
+                        const messageElement = document.createElement('div');
+                        messageElement.className = 'message bot-message';
+                        messageElement.textContent = `${sender}: ${plaintext}`;
+                        chatContainer.appendChild(messageElement);
+                        chatContainer.scrollTop = chatContainer.scrollHeight;
+                    } catch (decryptionError) {
+                        console.error("Decryption failed:", decryptionError);
+
+                        const fallbackMessageElement = document.createElement('div');
+                        fallbackMessageElement.className = 'message bot-message';
+                        fallbackMessageElement.textContent = `${sender}: [Encrypted message could not be decrypted]`;
+                        chatContainer.appendChild(fallbackMessageElement);
+                        chatContainer.scrollTop = chatContainer.scrollHeight;
+                    }
                 } catch (error) {
-                    console.error("Failed to decrypt message:", error);
+                    console.error("Error processing encrypted message:", error);
                 }
             } else {
                 const messageElement = document.createElement('div');
@@ -237,11 +229,9 @@
             console.log("ECDH key pair generated successfully.");
 
             const publicKey = await window.crypto.subtle.exportKey("spki", keyPair.publicKey);
-            const publicKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(publicKey)));
-
             privateKey = keyPair.privateKey;
 
-            return publicKeyBase64;
+            return btoa(String.fromCharCode(...new Uint8Array(publicKey)));
         } catch (error) {
             console.error("Error generating ECDH key pair:", error);
             throw new Error("Failed to generate ECDH key pair.");
@@ -279,7 +269,10 @@
 
                 const iv = window.crypto.getRandomValues(new Uint8Array(16));
                 const encryptedMessage = await window.crypto.subtle.encrypt(
-                    { name: "AES-CBC", iv },
+                    {
+                        name: "AES-CBC",
+                        iv: iv,
+                    },
                     sharedKey,
                     new TextEncoder().encode(messageText)
                 );
