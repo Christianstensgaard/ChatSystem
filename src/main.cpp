@@ -198,7 +198,7 @@ void handle_websocket(tcp::socket socket) {
 
                     std::lock_guard<std::mutex> lock(user_map_mutex);
                     if (user_map.find(recipient) != user_map.end()) {
-                        user_map[recipient]->write(net::buffer("MESSAGE FROM " + username + ": " + encrypted_message));
+                        user_map[recipient]->write(net::buffer(username + ": " + encrypted_message));
                     } else {
                         ws->write(net::buffer("ERROR: User not found"));
                     }
