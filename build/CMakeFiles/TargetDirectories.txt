@@ -1,0 +1,3 @@
+/mnt/c/git/apiCpp/build/CMakeFiles/http_server.dir
+/mnt/c/git/apiCpp/build/CMakeFiles/edit_cache.dir
+/mnt/c/git/apiCpp/build/CMakeFiles/rebuild_cache.dir

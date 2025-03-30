@@ -1,0 +1,8 @@
+services:
+  api_cpp:
+    build:
+      context: .
+      dockerfile: dockerfile
+    ports:
+      - "8080:8080" # HTTP server
+      - "8081:8081" # WebSocket server

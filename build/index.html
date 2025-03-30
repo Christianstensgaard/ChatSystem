@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chatter</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: #f7f7f8;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    header {
+      background-color: #10a37f;
+      color: white;
+      padding: 10px 20px;
+      text-align: center;
+      font-size: 1.5em;
+    }
+    .chat-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 20px;
+      overflow-y: auto;
+    }
+    .message {
+      margin: 10px 0;
+      padding: 10px 15px;
+      border-radius: 10px;
+      max-width: 70%;
+    }
+    .user-message {
+      background-color: #10a37f;
+      color: white;
+      align-self: flex-end;
+    }
+    .bot-message {
+      background-color: #e5e5ea;
+      color: black;
+      align-self: flex-start;
+    }
+    .input-container {
+      display: flex;
+      padding: 10px;
+      background-color: white;
+      border-top: 1px solid #ddd;
+    }
+    .input-container input {
+      flex: 1;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      font-size: 1em;
+    }
+    .input-container button {
+      margin-left: 10px;
+      padding: 10px 20px;
+      background-color: #10a37f;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 1em;
+    }
+    .input-container button:hover {
+      background-color: #0e8c6c;
+    }
+  </style>
+</head>
+<body>
+  <header>Some Chat App</header>
+  <div class="chat-container" id="chat-container">
+  </div>
+  <div class="input-container">
+    <input type="text" id="username-input" placeholder="Enter your username" />
+    <button id="register-button">Register</button>
+  </div>
+  <div class="input-container">
+    <input type="text" id="recipient-input" placeholder="Recipient username" disabled />
+    <input type="text" id="message-input" placeholder="Type your message here..." disabled />
+    <button id="send-button" disabled>Send</button>
+  </div>
+
+  <script>
+    const chatContainer = document.getElementById('chat-container');
+    const usernameInput = document.getElementById('username-input');
+    const registerButton = document.getElementById('register-button');
+    const recipientInput = document.getElementById('recipient-input');
+    const messageInput = document.getElementById('message-input');
+    const sendButton = document.getElementById('send-button');
+
+    let socket;
+    let privateKey;
+    let recipientPublicKey;
+    let sharedKey;
+
+    const connectWebSocket = () => {
+        socket = new WebSocket('ws://localhost:8081');
+
+        socket.onopen = () => {
+            console.log('WebSocket connection established.');
+            registerButton.disabled = false;
+        };
+
+        const base64Decode = (data) => {
+            const binaryString = atob(data);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes;
+        };
+
+        const base64Encode = (data) => {
+            return btoa(String.fromCharCode(...new Uint8Array(data)));
+        };
+
+        socket.onmessage = async (event) => {
+            const data = event.data;
+
+            if (data.startsWith("PUBLIC_KEY:")) {
+                try {
+                    const recipientKeyBytes = base64Decode(data.replace("PUBLIC_KEY:", ""));
+                    console.log("Received recipient's public key (raw bytes):", recipientKeyBytes);
+
+                    const recipientKeyBase64 = btoa(String.fromCharCode(...recipientKeyBytes));
+                    console.log("Recipient's public key (Base64):", recipientKeyBase64);
+
+                    if (recipientKeyBytes.length < 65 || recipientKeyBytes.length > 91) {
+                        throw new Error("Invalid recipient public key length.");
+                    }
+
+                    try {
+                        recipientPublicKey = await window.crypto.subtle.importKey(
+                            "spki",
+                            recipientKeyBytes,
+                            { name: "ECDH", namedCurve: "P-256" },
+                            true,
+                            []
+                        );
+                        console.log("Recipient's public key imported successfully.");
+                    } catch (importError) {
+                        console.error("Error importing recipient's public key:", importError);
+                        throw new Error("Failed to import recipient's public key. Ensure it is in the correct SPKI format.");
+                    }
+
+                    try {
+                        sharedKey = await window.crypto.subtle.deriveKey(
+                            {
+                                name: "ECDH",
+                                public: recipientPublicKey,
+                            },
+                            privateKey,
+                            { name: "AES-CBC", length: 256 },
+                            false,
+                            ["encrypt", "decrypt"]
+                        );
+                        console.log("Shared key derived successfully. Connection established with recipient. You can now send encrypted messages.");
+                    } catch (deriveError) {
+                        console.error("Error deriving shared key:", deriveError);
+                        throw new Error("Failed to derive shared key. Ensure the recipient's public key is valid.");
+                    }
+                } catch (error) {
+                    console.error("Error during shared key derivation:", error);
+                    console.log("Failed to establish a secure connection with the recipient. Please try again.");
+                }
+            } else if (data.startsWith("MESSAGE FROM")) {
+                try {
+                    if (!sharedKey) {
+                        console.warn("Shared key is not available. Message decryption skipped.");
+                        console.log("Cannot decrypt the message because the shared key is not available. Please establish a secure connection first.");
+                        return;
+                    }
+
+                    const messageParts = data.split(": ");
+                    const sender = messageParts[0].replace("MESSAGE FROM ", "");
+                    const encodedMessage = messageParts[1];
+                    const encryptedMessage = base64Decode(encodedMessage);
+
+                    const iv = encryptedMessage.slice(0, 16);
+                    if (iv.length !== 16) {
+                        throw new Error("Invalid IV length.");
+                    }
+                    const ciphertext = encryptedMessage.slice(16);
+                    const decryptedMessage = await window.crypto.subtle.decrypt(
+                        { name: "AES-CBC", iv },
+                        sharedKey,
+                        ciphertext
+                    );
+
+                    const messageElement = document.createElement('div');
+                    messageElement.className = 'message bot-message';
+                    messageElement.textContent = `${sender}: ${new TextDecoder().decode(decryptedMessage)}`;
+                    chatContainer.appendChild(messageElement);
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                } catch (error) {
+                    console.error("Failed to decrypt message:", error);
+                }
+            } else {
+                const messageElement = document.createElement('div');
+                messageElement.className = 'message bot-message';
+                messageElement.textContent = data;
+                chatContainer.appendChild(messageElement);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        };
+
+        socket.onclose = () => {
+            console.log('WebSocket connection closed.');
+            registerButton.disabled = true;
+            recipientInput.disabled = true;
+            messageInput.disabled = true;
+            sendButton.disabled = true;
+        };
+
+        socket.onerror = (error) => {
+            console.error('WebSocket error:', error);
+        };
+    };
+
+    const generateECDHKeyPair = async () => {
+        try {
+            const keyPair = await window.crypto.subtle.generateKey(
+                {
+                    name: "ECDH",
+                    namedCurve: "P-256",
+                },
+                true,
+                ["deriveKey"]
+            );
+
+            console.log("ECDH key pair generated successfully.");
+
+            const publicKey = await window.crypto.subtle.exportKey("spki", keyPair.publicKey);
+            const publicKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(publicKey)));
+
+            privateKey = keyPair.privateKey;
+
+            return publicKeyBase64;
+        } catch (error) {
+            console.error("Error generating ECDH key pair:", error);
+            throw new Error("Failed to generate ECDH key pair.");
+        }
+    };
+
+    const registerUsername = async () => {
+        const username = usernameInput.value.trim();
+        if (username) {
+            const publicKey = await generateECDHKeyPair();
+            socket.send(`REGISTER:${username}:${publicKey}`);
+            recipientInput.disabled = false;
+            messageInput.disabled = false;
+            sendButton.disabled = false;
+            registerButton.disabled = true;
+            usernameInput.disabled = true;
+        }
+    };
+
+    const requestConnection = () => {
+        const recipient = recipientInput.value.trim();
+        if (recipient) {
+            socket.send(`REQUEST_PUBLIC_KEY:${recipient}`);
+        }
+    };
+
+    const sendMessage = async () => {
+        const recipient = recipientInput.value.trim();
+        const messageText = messageInput.value.trim();
+        if (recipient && messageText) {
+            try {
+                if (!sharedKey) {
+                    throw new Error("Shared key is not available. Please ensure a secure connection is established.");
+                }
+
+                const iv = window.crypto.getRandomValues(new Uint8Array(16));
+                const encryptedMessage = await window.crypto.subtle.encrypt(
+                    { name: "AES-CBC", iv },
+                    sharedKey,
+                    new TextEncoder().encode(messageText)
+                );
+
+                const combinedMessage = new Uint8Array([...iv, ...new Uint8Array(encryptedMessage)]);
+                const encodedMessage = btoa(String.fromCharCode(...combinedMessage));
+
+                socket.send(`SEND:${recipient}:${encodedMessage}`);
+                const userMessage = document.createElement('div');
+                userMessage.className = 'message user-message';
+                userMessage.textContent = `You: ${messageText}`;
+                chatContainer.appendChild(userMessage);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+                messageInput.value = '';
+            } catch (error) {
+                console.error("Failed to encrypt message:", error);
+                console.log("Failed to send the message. Please try again.");
+            }
+        } else {
+            console.log("Recipient and message text cannot be empty.");
+        }
+    };
+
+    registerButton.addEventListener('click', registerUsername);
+    recipientInput.addEventListener('change', requestConnection);
+    sendButton.addEventListener('click', sendMessage);
+    messageInput.addEventListener('keypress', (event) => {
+        if (event.key === 'Enter') {
+            sendMessage();
+        }
+    });
+
+    connectWebSocket();
+  </script>
+</body>
+</html>
